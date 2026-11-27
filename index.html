@@ -38,6 +38,13 @@ body{background:var(--bg);color:var(--ink);font-family:Fredoka,ui-rounded,system
 @keyframes pulse{to{filter:brightness(1.6)}}
 .pop{animation:pop .32s ease-in forwards}
 @keyframes pop{35%{transform:scale(1.35);filter:brightness(2.2);box-shadow:0 0 26px var(--gl),0 0 56px var(--gl)}to{transform:scale(0);opacity:0}}
+#tools{position:fixed;top:calc(env(safe-area-inset-top,0px) + 8px);right:10px;display:flex;gap:8px;z-index:7}
+#tools button{width:38px;height:38px;padding:0;border-radius:12px;background:var(--panel);color:var(--ink);display:flex;align-items:center;justify-content:center}
+#tools svg{width:20px;height:20px;fill:currentColor}
+#pz{position:absolute;inset:0;z-index:5;background:color-mix(in srgb,var(--bg) 90%,transparent);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);border-radius:16px;display:none;flex-direction:column;align-items:center;justify-content:center;gap:12px;text-align:center}
+#pz.on{display:flex}
+#pz b{font-size:28px;font-weight:600}
+#pz button.alt{background:var(--empty);color:var(--ink);font-size:15px}
 #fx{position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:8}
 #tray{display:flex;gap:10px;width:calc(8*(var(--c) + var(--g)) + 12px);justify-content:space-between}
 .slot{flex:1;height:calc(3*var(--c) + 4px);display:flex;align-items:center;justify-content:center}
@@ -64,12 +71,14 @@ button:focus-visible{outline:3px solid var(--ink);outline-offset:2px}
 </style>
 </head>
 <body>
+<div id="tools"><button id="bSound" aria-label="Sound on or off"></button><button id="bPause" aria-label="Pause"></button></div>
 <div id="hud">
   <div><div class="lbl">Score</div><div class="num" id="sc">0</div></div>
   <div id="combo"><div id="cv"></div><div id="pips"><i></i><i></i><i></i></div></div>
   <div style="text-align:right"><div class="lbl">Best</div><div class="num" id="bs">0</div></div>
 </div>
 <div id="wrap"><div id="board"></div><div id="toast"></div>
+  <div id="pz"><b id="pzt">Paused</b><button id="bResume">Resume</button><button id="bNew" class="alt">New game</button></div>
   <div id="over"><svg viewBox="0 0 100 100" width="84" height="84"><circle cx="50" cy="50" r="44" fill="none" stroke="currentColor" stroke-width="5"/><circle cx="35" cy="42" r="5" fill="currentColor"/><circle cx="65" cy="42" r="5" fill="currentColor"/><path d="M33 72 Q50 58 67 72" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round"/><path id="tear" d="M70 50 q-5 8 0 11 q5 -3 0 -11z" fill="#4cc9f0"/></svg><b>No more room</b><div id="fs" class="lbl"></div><button id="again">Try again</button></div>
 </div>
 <div id="tray"></div>
@@ -116,9 +125,38 @@ function solvable(g,ps,need){
   return false;
 }
 const solve=(g,h,need)=>{nodes=0;BUDGET=need?15000:1e9;return solvable(g,h,need)};
+const pick=()=>POOL[Math.floor(Math.random()*POOL.length)];
+let since=0;
+// Best outcome reachable (beam search, top 8 placements per step): lines cleared minus cells left over.
+function plan(g,ps,need,acc){
+  if(!ps.length)return need?-1e9:acc*12-g.reduce((a,v)=>a+(v?1:0),0);
+  const opts=[];
+  ps.forEach((p,k)=>{for(let r=0;r<N;r++)for(let c=0;c<N;c++)if(fits(g,p,r,c))opts.push({k,res:place(g,p,r,c)})});
+  opts.sort((a,b)=>b.res.lines-a.res.lines||Math.random()-.5);
+  let best=-1e9;
+  for(const o of opts.slice(0,8)){
+    const v=plan(o.res.g,ps.filter((_,i)=>i!==o.k),need&&!o.res.lines,acc+o.res.lines);
+    if(v>best)best=v;
+  }
+  return best;
+}
+// Mercy set: among sets that already pass the solvable/combo checks, take the one that helps the most.
+function relief(need){
+  const t0=performance.now();let best=null,bv=-1e9;
+  for(let t=0;t<40&&performance.now()-t0<200;t++){
+    const h=[pick(),pick(),pick()];
+    if(!solve(G,h,need))continue;
+    const v=plan(G,h,need,0);
+    if(v>bv){bv=v;best=h}
+  }
+  return best;
+}
 function deal(){
-  const pick=()=>POOL[Math.floor(Math.random()*POOL.length)];
   const need=combo>0; // a live combo needs a set that can clear a line
+  const fill=G.reduce((a,v)=>a+(v?1:0),0)/64;
+  since++;
+  // The fuller the board, the likelier a mercy set (never two sets in a row, guaranteed when it is very full).
+  if(fill>=.4&&since>=2&&(Math.random()<Math.min(.85,(fill-.35)*2.2)||(fill>=.6&&since>=3))){const h=relief(need);if(h){since=0;return h}}
   if(need)for(let t=0;t<120;t++){const h=[pick(),pick(),pick()];if(solve(G,h,true))return h}
   for(let t=0;t<400;t++){const h=[pick(),pick(),pick()];if(solve(G,h,false))return h}
   return[pick(),pick(),pick()]; // board is essentially full: nothing could be solved
@@ -220,13 +258,13 @@ function loop(){
 function toast(t){const e=$("#toast");e.textContent=t;e.style.setProperty("--nc",rnd(NEON));e.style.fontSize=Math.min(30+combo*4,54)+"px";e.classList.remove("show");void e.offsetWidth;e.classList.add("show")}
 
 function newGame(){
-  G=new Array(64).fill(0);score=0;combo=0;setCleared=false;over=false;busy=false;
-  $("#over").classList.remove("on");board.classList.remove("dead");hand=deal();paint();renderHand();hud();
+  G=new Array(64).fill(0);score=0;combo=0;since=0;setCleared=false;over=false;busy=false;
+  $("#over").classList.remove("on");board.classList.remove("dead");hand=deal();paint();renderHand();hud();save();
 }
 function checkOver(){
   const left=hand.filter(Boolean);
   if(left.length&&left.every(p=>!canPlace(G,p))){
-    over=true;board.classList.add("dead");
+    over=true;board.classList.add("dead");setTimeout(sfx.over,500);
     const nb=score>0&&score>=best;
     $("#fs").innerHTML=(nb?"A new best of ":"You scored ")+score+".<br>"+(nb?"But the board is full.":"Your best is "+best+".");
     $("#over").classList.add("on");
@@ -235,7 +273,7 @@ function checkOver(){
 
 function geom(){const r=board.getBoundingClientRect();return{x:r.left,y:r.top,s:r.width/N}}
 function start(e,i){
-  if(over||busy)return;e.preventDefault();
+  if(over||busy||paused)return;e.preventDefault();sfx.pick();
   const p=hand[i],g=mk(p,"ghost"),el=tray.children[i].firstChild;document.body.append(g);el.style.visibility="hidden";
   const touch=e.pointerType!=="mouse",gw=g.offsetWidth,gh=g.offsetHeight;
   drag={i,p,g,el,t:null,touch,k:touch?1.75:1,sx:e.clientX,sy:e.clientY,ax:e.clientX-gw/2,ay:e.clientY-gh/2-(touch?gh/2+40:0)};
@@ -261,8 +299,8 @@ function move(e){
 }
 function end(){
   removeEventListener("pointermove",move);removeEventListener("pointerup",end);removeEventListener("pointercancel",end);
-  const{g,t,i,el}=drag;g.remove();clearPv();drag=null;
-  if(t)commit(i,t.r,t.c);else el.style.visibility="";
+  const{g,t,i,el,quiet}=drag;g.remove();clearPv();drag=null;
+  if(t)commit(i,t.r,t.c);else{el.style.visibility="";if(!quiet)sfx.drop()}
 }
 function commit(i,r,c){
   const p=hand[i],res=place(G,p,r,c);busy=true;
@@ -271,21 +309,103 @@ function commit(i,r,c){
     combo++;setCleared=true;const pts=res.lines*res.lines*10*combo;score+=pts;
     toast(WORDS[Math.min(res.lines,5)]+(combo>1?`Combo ×${combo}  +${pts}`:`+${pts}`));
   }
-  G=res.pre;paint();res.cl.forEach(k=>cells[k].classList.add("pop"));if(res.lines)boom(res,combo);else p.cs.forEach(([a,b])=>puff(cells[(r+a)*N+c+b],PAL[p.col]));
+  G=res.pre;paint();res.cl.forEach(k=>cells[k].classList.add("pop"));if(res.lines){boom(res,combo);sfx.clear(res.lines,combo)}else{p.cs.forEach(([a,b])=>puff(cells[(r+a)*N+c+b],PAL[p.col]));sfx.place()}
   if(score>best){best=score;try{localStorage.setItem("bb-best",best)}catch(e){}}
   renderHand();hud();
   setTimeout(()=>{
     G=res.g;paint();
     if(hand.every(h=>!h)){
-      if(combo>0&&!setCleared){combo=0;toast("Combo lost")}
-      setCleared=false;hand=deal();renderHand();
+      if(combo>0&&!setCleared){combo=0;toast("Combo lost");sfx.lost()}
+      setCleared=false;hand=deal();renderHand();setTimeout(sfx.deal,260);
     }
-    busy=false;hud();checkOver();
+    busy=false;hud();checkOver();save();
   },res.lines?330:0);
 }
+// ---------- sound (all synthesized, no files) ----------
+let AC=null,master=null,muted=false;
+try{muted=localStorage.getItem("bb-mute")==="1"}catch(e){}
+function audio(){
+  if(!AC){
+    try{
+      AC=new(window.AudioContext||window.webkitAudioContext)();
+      const comp=AC.createDynamicsCompressor();master=AC.createGain();master.gain.value=muted?0:.7;
+      master.connect(comp);comp.connect(AC.destination);
+    }catch(e){return null}
+  }
+  if(AC.state==="suspended")AC.resume();
+  return AC;
+}
+["pointerup","touchend","click"].forEach(t=>addEventListener(t,()=>{audio()},{passive:true}));
+function tone(f,t0,dur,type,vol,f2){
+  const a=audio();if(!a)return;const T=a.currentTime+t0,o=a.createOscillator(),g=a.createGain();
+  o.type=type;o.frequency.setValueAtTime(f,T);if(f2)o.frequency.exponentialRampToValueAtTime(f2,T+dur);
+  g.gain.setValueAtTime(.0001,T);g.gain.exponentialRampToValueAtTime(vol,T+.012);g.gain.exponentialRampToValueAtTime(.0001,T+dur);
+  o.connect(g);g.connect(master);o.start(T);o.stop(T+dur+.03);
+}
+function noise(t0,dur,vol,f0,f1){
+  const a=audio();if(!a)return;const T=a.currentTime+t0,n=Math.floor(a.sampleRate*dur),buf=a.createBuffer(1,n,a.sampleRate),d=buf.getChannelData(0);
+  for(let i=0;i<n;i++)d[i]=Math.random()*2-1;
+  const s=a.createBufferSource(),f=a.createBiquadFilter(),g=a.createGain();
+  s.buffer=buf;f.type="lowpass";f.frequency.setValueAtTime(f0,T);f.frequency.exponentialRampToValueAtTime(f1,T+dur);
+  g.gain.setValueAtTime(vol,T);g.gain.exponentialRampToValueAtTime(.0001,T+dur);
+  s.connect(f);f.connect(g);g.connect(master);s.start(T);
+}
+const SC=[0,2,4,7,9,12,14,16,19,21,24],hz=st=>261.63*Math.pow(2,st/12);
+const sfx={
+  pick(){tone(520,0,.07,"sine",.18,780)},
+  drop(){tone(300,0,.09,"sine",.15,200)},
+  place(){tone(170,0,.12,"sine",.5,60);noise(0,.05,.25,3000,400);tone(900,0,.04,"triangle",.1)},
+  // a rising scale: every line adds notes and every combo step starts the scale higher
+  clear(lines,combo){
+    const n=2+lines*2,base=Math.min(combo,8);
+    for(let i=0;i<n;i++){const st=SC[Math.min(base+i,SC.length-1)];tone(hz(st),i*.055,.28,"triangle",.28);tone(hz(st+12),i*.055,.2,"sine",.1)}
+    tone(110,0,.45,"sine",.7,38);noise(0,.4,.5,6000,200);
+    if(lines>=2)tone(hz(SC[base]+24),n*.055,.5,"sine",.15,hz(SC[base]+36));
+    if(lines>=3){[0,4,7,12].forEach(s=>tone(hz(SC[base]+s+12),n*.055+.05,.7,"sawtooth",.1));noise(.05,.7,.4,9000,300)}
+  },
+  lost(){tone(hz(7),0,.18,"triangle",.25);tone(hz(0),.14,.35,"triangle",.25,hz(-5))},
+  deal(){[0,1,2].forEach(i=>tone(700+i*140,i*.07,.06,"sine",.1))},
+  over(){[7,5,3,0,-5].forEach((s,i)=>{tone(hz(s),i*.32,.6,"triangle",.22);tone(hz(s)*1.005,i*.32,.6,"sine",.12)});noise(1.4,1,.2,800,80)},
+  pause(){tone(400,0,.08,"sine",.15,300)},
+  resume(){tone(300,0,.08,"sine",.15,450)}
+};
+const IC={
+  pause:'<svg viewBox="0 0 24 24"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>',
+  play:'<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>',
+  on:'<svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 4V5L7 9H3z"/><path d="M15.5 8.5a5 5 0 010 7M18 6a8.5 8.5 0 010 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  off:'<svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 4V5L7 9H3z"/><path d="M16 9l5 6M21 9l-5 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>'
+};
+function icons(){$("#bSound").innerHTML=muted?IC.off:IC.on;$("#bPause").innerHTML=paused?IC.play:IC.pause}
+$("#bSound").onclick=()=>{
+  muted=!muted;try{localStorage.setItem("bb-mute",muted?"1":"0")}catch(e){}
+  audio();if(master)master.gain.value=muted?0:.7;
+  icons();if(!muted)sfx.pick();
+};
+
+// ---------- pause and save ----------
+let paused=false;
+function save(){
+  if(!hand)return;
+  try{
+    if(over){localStorage.removeItem("bb-save");return}
+    localStorage.setItem("bb-save",JSON.stringify({G,h:hand.map(p=>p?S.indexOf(p):-1),score,combo,sc:setCleared?1:0,since}));
+  }catch(e){}
+}
+function setPause(on,msg){
+  paused=on;$("#pz").classList.toggle("on",on);
+  if(on){if(drag){drag.t=null;drag.quiet=1;end()}$("#pzt").textContent=msg||"Paused"}
+  icons();
+}
+$("#bPause").onclick=()=>{if(over)return;const on=!paused;setPause(on);on?sfx.pause():sfx.resume()};
+$("#bResume").onclick=()=>{setPause(false);sfx.resume()};
+$("#bNew").onclick=()=>{newGame();setPause(false);sfx.deal()};
+document.addEventListener("visibilitychange",()=>{
+  if(document.hidden&&hand&&!over){if(!busy)save();if(!paused)setPause(true,"Paused")}
+});
+addEventListener("pagehide",()=>{if(hand&&!over&&!busy)save()});
 // Grab the nearest piece from anywhere on the screen.
 addEventListener("pointerdown",e=>{
-  if(over||busy||drag||e.target.closest("button"))return;
+  if(over||busy||paused||drag||e.target.closest("button"))return;
   let bi=-1,bd=1e9;
   [...tray.children].forEach((s,i)=>{
     if(!hand[i])return;
@@ -296,7 +416,13 @@ addEventListener("pointerdown",e=>{
 });
 addEventListener("resize",()=>{if(!drag&&hand)renderHand()});
 $("#again").onclick=newGame;
-newGame();
+(function(){
+  let s=null;try{s=JSON.parse(localStorage.getItem("bb-save"))}catch(e){}
+  if(s&&Array.isArray(s.G)&&s.G.length===64&&Array.isArray(s.h)&&s.h.length===3&&s.h.every(i=>i===-1||S[i])&&s.h.some(i=>i!==-1)){
+    G=s.G;hand=s.h.map(i=>i<0?null:S[i]);score=s.score|0;combo=s.combo|0;setCleared=!!s.sc;since=s.since|0;over=false;busy=false;
+    paint();renderHand();hud();setPause(true,"Welcome back");
+  }else{newGame();icons()}
+})();
 if("serviceWorker" in navigator)addEventListener("load",()=>navigator.serviceWorker.register("sw.js").catch(()=>{}));
 </script>
 </body>
