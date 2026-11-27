@@ -37,11 +37,11 @@ body{background:var(--bg);color:var(--ink);font-family:Fredoka,ui-rounded,system
 @keyframes pop{35%{transform:scale(1.3);filter:brightness(1.8)}to{transform:scale(0);opacity:0}}
 #fx{position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:8}
 #tray{display:flex;gap:10px;width:calc(8*(var(--c) + var(--g)) + 12px);justify-content:space-between}
-.slot{flex:1;height:calc(5*var(--c)*.5 + 12px);display:flex;align-items:center;justify-content:center}
-.piece{display:grid;gap:2px;cursor:grab;touch-action:none;padding:8px}
-.piece .cell,.piece .gap{width:calc(var(--c)*.5);height:calc(var(--c)*.5)}
+.slot{flex:1;height:calc(3*var(--c) + 4px);display:flex;align-items:center;justify-content:center}
+.piece{display:grid;gap:2px;cursor:grab;touch-action:none}
+.piece .cell,.piece .gap{width:var(--t);height:var(--t)}
 .piece .gap{background:none}
-.ghost{position:fixed;z-index:9;pointer-events:none;display:grid;gap:var(--g)}
+.ghost{position:fixed;z-index:9;pointer-events:none;display:grid;gap:var(--g);transform-origin:center}
 .ghost .cell{width:var(--c);height:var(--c)}
 .ghost .gap{width:var(--c);height:var(--c)}
 #toast{position:absolute;left:0;right:0;top:38%;text-align:center;font-weight:700;font-size:30px;pointer-events:none;opacity:0;text-shadow:0 2px 0 var(--bg)}
@@ -133,7 +133,7 @@ function renderHand(){
   tray.innerHTML="";
   hand.forEach((p,i)=>{
     const s=document.createElement("div");s.className="slot";
-    if(p)s.append(mk(p,"piece"));
+    if(p){const el=mk(p,"piece"),c=cells[0].offsetWidth,t=Math.min(.8*c,((tray.clientWidth-20)/3-8)/p.w-2,(3*c-4)/p.h-2);el.style.setProperty("--t",t+"px");s.append(el)}
     tray.append(s);
   });
 }
@@ -195,13 +195,19 @@ function geom(){const r=board.getBoundingClientRect();return{x:r.left,y:r.top,s:
 function start(e,i){
   if(over||busy)return;e.preventDefault();
   const p=hand[i],g=mk(p,"ghost"),el=tray.children[i].firstChild;document.body.append(g);el.style.visibility="hidden";
-  drag={i,p,g,el,t:null,touch:e.pointerType!=="mouse"};move(e);
+  const touch=e.pointerType!=="mouse",gw=g.offsetWidth,gh=g.offsetHeight;
+  drag={i,p,g,el,t:null,touch,k:touch?1.5:1,sx:e.clientX,sy:e.clientY,ax:e.clientX-gw/2,ay:e.clientY-gh/2-(touch?gh/2+40:0)};
+  // starts at the tray size, jumps up above the finger and grows to board size
+  g.style.transform=`scale(${el.querySelector(".cell").offsetWidth/g.querySelector(".cell").offsetWidth})`;
+  move(e);
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{g.style.transition="transform .14s ease-out";g.style.transform="scale(1)"}));
   addEventListener("pointermove",move);addEventListener("pointerup",end);addEventListener("pointercancel",end);
 }
 function clearPv(){cells.forEach(d=>d.classList.remove("pv","hl"))}
 function move(e){
-  const{g,p}=drag,gw=g.offsetWidth,gh=g.offsetHeight;
-  const left=e.clientX-gw/2,top=e.clientY-gh/2-(drag.touch?gh/2+40:0);
+  const{g,p,k}=drag,gw=g.offsetWidth,gh=g.offsetHeight;
+  // on touch the piece travels 1.5x the finger's distance
+  const left=Math.min(Math.max(drag.ax+k*(e.clientX-drag.sx),-gw/2),innerWidth-gw/2),top=Math.min(Math.max(drag.ay+k*(e.clientY-drag.sy),-gh/2),innerHeight-gh/2);
   g.style.left=left+"px";g.style.top=top+"px";
   const b=geom(),c=Math.round((left-b.x)/b.s),r=Math.round((top-b.y)/b.s);
   clearPv();drag.t=null;
@@ -246,6 +252,7 @@ addEventListener("pointerdown",e=>{
   });
   if(bi>=0)start(e,bi);
 });
+addEventListener("resize",()=>{if(!drag&&hand)renderHand()});
 $("#again").onclick=newGame;
 newGame();
 if("serviceWorker" in navigator)addEventListener("load",()=>navigator.serviceWorker.register("sw.js").catch(()=>{}));
